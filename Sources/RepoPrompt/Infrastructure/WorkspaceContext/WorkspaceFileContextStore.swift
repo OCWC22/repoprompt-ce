@@ -351,6 +351,7 @@ actor WorkspaceFileContextStore {
     }
 
     func searchCatalogSnapshot(rootScope: WorkspaceLookupRootScope = .visibleWorkspace) -> WorkspaceSearchCatalogSnapshot {
+        let catalogSnapshotState = EditFlowPerf.begin(EditFlowPerf.Stage.Search.catalogSnapshot)
         let roots = rootsForPathLookup(scope: rootScope)
         let rootsByID = Dictionary(uniqueKeysWithValues: roots.map { ($0.id, $0) })
         let allowedRootIDs = Set(rootsByID.keys)
@@ -375,7 +376,7 @@ actor WorkspaceFileContextStore {
             },
             fileCount: files.count
         )
-        return WorkspaceSearchCatalogSnapshot(
+        let snapshot = WorkspaceSearchCatalogSnapshot(
             generation: diagnostics.generation,
             rootScope: rootScope,
             roots: roots,
@@ -383,6 +384,16 @@ actor WorkspaceFileContextStore {
             entries: entries,
             diagnostics: diagnostics
         )
+        EditFlowPerf.end(
+            EditFlowPerf.Stage.Search.catalogSnapshot,
+            catalogSnapshotState,
+            EditFlowPerf.Dimensions(
+                fileCount: diagnostics.fileCount,
+                rootCount: diagnostics.rootCount,
+                folderCount: diagnostics.folderCount
+            )
+        )
+        return snapshot
     }
 
     func directFolderChildren(
