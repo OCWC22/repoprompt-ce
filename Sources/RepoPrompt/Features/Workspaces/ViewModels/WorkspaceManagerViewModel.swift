@@ -2590,10 +2590,25 @@ class WorkspaceManagerViewModel: ObservableObject {
         // Respect per-tab suspension: avoid mutating composeTabs during UI apply,
         // so mirroring can treat these as transient snapshots.
         let shouldCommit: Bool = commitToMemory && !suspendedSnapshotCommitTabIDs.contains(snapshot.id)
+        let didChange = Self.composeTabSnapshotHasMeaningfulChanges(snapshot, comparedTo: base, touchModified: touchModified)
+        guard didChange else { return }
         if shouldCommit {
             updateComposeTabFastNoDirty(snapshot, touchModified: touchModified)
         }
         composeTabSnapshotSubject.send(snapshot)
+    }
+
+    private static func composeTabSnapshotHasMeaningfulChanges(
+        _ snapshot: ComposeTabState,
+        comparedTo base: ComposeTabState?,
+        touchModified: Bool
+    ) -> Bool {
+        guard let baseline = base else { return true }
+        var comparableSnapshot = snapshot
+        if !touchModified {
+            comparableSnapshot.lastModified = baseline.lastModified
+        }
+        return comparableSnapshot != baseline
     }
 
     @MainActor
