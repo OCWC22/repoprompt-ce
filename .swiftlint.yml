@@ -52,7 +52,7 @@ only_rules:
   - unused_import
 
   # UI quality gates.
-  - no_swiftui_help_modifier
+  - custom_rules
 
 # Deferred for later cleanup plans: line/file/type/function length, complexity,
 # force unwrap/try/cast, implicitly unwrapped optionals, unowned captures,
