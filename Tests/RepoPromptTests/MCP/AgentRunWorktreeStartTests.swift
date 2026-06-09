@@ -683,6 +683,48 @@ final class AgentRunWorktreeStartTests: XCTestCase {
         }
     }
 
+    func testSharedStartWorktreeCoordinatorHonorsPreCancelledCreateWithoutMutation() async throws {
+        let fixture = try makeGitFixture()
+        let window = try await makeWindow(root: fixture.repo)
+        defer { WindowStatesManager.shared.unregisterWindowState(window) }
+        let agentModeVM = window.agentModeViewModel
+        let target = try await agentModeVM.mcpResolveOrCreateSessionTarget(
+            tabID: nil,
+            sessionID: nil,
+            createIfNeeded: true,
+            sessionName: nil
+        )
+        let coordinator = AgentMCPStartWorktreeCoordinator(
+            operationName: "agent_explore.start",
+            vcsService: .shared,
+            gitTargetResolver: .init()
+        )
+        let request = try coordinator.parseRequest(args: ["worktree_create": .bool(true)])
+        let preparation = Task { @MainActor in
+            try await coordinator.prepare(
+                request: request,
+                target: target,
+                targetWindow: window
+            )
+        }
+        preparation.cancel()
+
+        do {
+            try await preparation.value
+            XCTFail("A pre-cancelled start must not create or bind a worktree.")
+        } catch {
+            XCTAssertTrue(error is CancellationError, "Expected CancellationError, got: \(error)")
+        }
+
+        let descriptors = try await VCSService.shared.listGitWorktrees(at: fixture.repo)
+        XCTAssertTrue(descriptors.allSatisfy(\.isMain), GitWorktreeTestSupport.descriptorDump(
+            repo: fixture.repo,
+            expectedPath: fixture.repo,
+            descriptors: descriptors
+        ))
+        await agentModeVM.mcpDiscardSessionTarget(target)
+    }
+
     func testAgentExploreStartInheritsParentWorktreeByDefaultAndCanOptOut() async throws {
         for inheritWorktreeBindings in [true, false] {
             let root = try makeTemporaryDirectory(named: "explore-root")
@@ -858,6 +900,53 @@ final class AgentRunWorktreeStartTests: XCTestCase {
         let retainedSession = try XCTUnwrap(try window.agentModeViewModel.authoritativeLiveSession(for: first.sessionID))
         XCTAssertEqual(retainedSession.worktreeBindings, first.bindings)
         XCTAssertNil(try window.agentModeViewModel.authoritativeLiveSession(for: failed.sessionID))
+    }
+
+    func testAgentExploreBatchCancellationRetainsStartedChildAndDiscardsFailedAndUnstartedTargets() async throws {
+        let fixture = try makeGitFixture()
+        let window = try await makeWindow(root: fixture.repo)
+        defer { WindowStatesManager.shared.unregisterWindowState(window) }
+        let workspace = try XCTUnwrap(window.workspaceManager.activeWorkspace)
+        let sourceTabID = try XCTUnwrap(workspace.activeComposeTabID)
+        let parentID = UUID()
+        let source = window.agentModeViewModel.session(for: sourceTabID)
+        source.testInstallPersistentSessionBinding(sessionID: parentID)
+        source.mcpControlContext = makeMCPControlContext(sessionID: parentID)
+        let initialTabCount = workspace.composeTabs.count
+        let recorder = ExploreStartRecorder(
+            failureAtObservationIndex: 1,
+            failureKind: .cancellation,
+            activatesControlContext: true
+        )
+        let service = makeAgentExploreStartService(window: window, sourceTabID: sourceTabID, recorder: recorder)
+
+        do {
+            _ = try await service.execute(args: [
+                "op": .string("start"),
+                "messages": .array([.string("first"), .string("second"), .string("third")]),
+                "worktree_create": .bool(true),
+                "detach": .bool(true),
+                "timeout": .int(0)
+            ])
+            XCTFail("Expected the injected second-child cancellation")
+        } catch {
+            XCTAssertTrue(error is CancellationError, "Expected CancellationError, got: \(error)")
+        }
+
+        XCTAssertEqual(recorder.observations.count, 2, "The third child must never reach provider startup.")
+        let first = recorder.observations[0]
+        let cancelled = recorder.observations[1]
+        let firstBinding = try XCTUnwrap(first.bindings.first)
+        let cancelledBinding = try XCTUnwrap(cancelled.bindings.first)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: firstBinding.worktreeRootPath))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: cancelledBinding.worktreeRootPath))
+
+        let currentWorkspace = try XCTUnwrap(window.workspaceManager.activeWorkspace)
+        XCTAssertEqual(currentWorkspace.composeTabs.count, initialTabCount + 1)
+        XCTAssertTrue(currentWorkspace.composeTabs.contains { $0.id == first.tabID })
+        XCTAssertFalse(currentWorkspace.composeTabs.contains { $0.id == cancelled.tabID })
+        XCTAssertNotNil(try window.agentModeViewModel.authoritativeLiveSession(for: first.sessionID))
+        XCTAssertNil(try window.agentModeViewModel.authoritativeLiveSession(for: cancelled.sessionID))
     }
 
     func testAgentExploreBatchCreateRejectsSharedPathAndBranchBeforeTargetCreation() async throws {
@@ -1165,6 +1254,11 @@ final class AgentRunWorktreeStartTests: XCTestCase {
         #endif
     }
 
+    private enum ExploreStartFailureKind {
+        case provider
+        case cancellation
+    }
+
     private final class ExploreStartRecorder {
         struct Observation {
             let sessionID: UUID
@@ -1176,14 +1270,17 @@ final class AgentRunWorktreeStartTests: XCTestCase {
         }
 
         let failureAtObservationIndex: Int?
+        let failureKind: ExploreStartFailureKind
         let activatesControlContext: Bool
         var observations: [Observation] = []
 
         init(
             failureAtObservationIndex: Int? = nil,
+            failureKind: ExploreStartFailureKind = .provider,
             activatesControlContext: Bool = false
         ) {
             self.failureAtObservationIndex = failureAtObservationIndex
+            self.failureKind = failureKind
             self.activatesControlContext = activatesControlContext
         }
     }
@@ -1240,7 +1337,12 @@ final class AgentRunWorktreeStartTests: XCTestCase {
                             cleanupSessionStore: true
                         )
                     }
-                    throw MCPError.internalError("Injected explore provider start failure at index \(observationIndex).")
+                    switch recorder.failureKind {
+                    case .provider:
+                        throw MCPError.internalError("Injected explore provider start failure at index \(observationIndex).")
+                    case .cancellation:
+                        throw CancellationError()
+                    }
                 }
                 let snapshot = AgentRunMCPSnapshot(
                     sessionID: sessionID,

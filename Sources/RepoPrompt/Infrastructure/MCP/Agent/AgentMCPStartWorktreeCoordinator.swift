@@ -131,6 +131,7 @@ struct AgentMCPStartWorktreeCoordinator {
             throw MCPError.internalError("\(operationName) target did not resolve a session ID for worktree binding.")
         }
         let agentModeVM = targetWindow.agentModeViewModel
+        try Task.checkCancellation()
         if request.hasExplicitWorktreeArgs {
             do {
                 let context = try await resolveRepositoryContext(
@@ -159,6 +160,7 @@ struct AgentMCPStartWorktreeCoordinator {
                         sessionID: targetSessionID
                     )
                 }
+                try Task.checkCancellation()
                 let identity = try persistVisualIdentity(for: worktree, request: request)
                 let binding = makeBinding(
                     worktree: worktree,
@@ -174,6 +176,7 @@ struct AgentMCPStartWorktreeCoordinator {
             }
         }
 
+        try Task.checkCancellation()
         let bindings = agentModeVM.worktreeBindings(forAgentSessionID: targetSessionID, tabID: target.tabID)
         if !bindings.isEmpty {
             try await materializeRoots(
@@ -181,6 +184,7 @@ struct AgentMCPStartWorktreeCoordinator {
                 sessionID: targetSessionID,
                 targetWindow: targetWindow
             )
+            try Task.checkCancellation()
         }
     }
 
@@ -189,6 +193,7 @@ struct AgentMCPStartWorktreeCoordinator {
         targetSessionID: UUID?,
         agentModeVM: AgentModeViewModel
     ) -> Error {
+        if error is CancellationError { return error }
         guard let targetSessionID else { return error }
         let bindings = agentModeVM.worktreeBindings(forAgentSessionID: targetSessionID)
         guard let binding = bindings.first else { return error }
@@ -363,6 +368,7 @@ struct AgentMCPStartWorktreeCoordinator {
     }
 
     private func preparationError(_ error: Error) -> Error {
+        if error is CancellationError { return error }
         if error is MCPError { return error }
         let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         return MCPError.invalidParams("\(operationName) worktree preparation failed: \(message)")
