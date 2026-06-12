@@ -2546,7 +2546,16 @@ class WorkspaceFilesViewModel: ObservableObject {
 
         let rootReplayIngressGeneration = advanceRootReplayIngressGeneration(forRootKey: rootKey)
         await workspaceFileContextStore.registerDeferredReplayRootGeneration(rootReplayIngressGeneration, forRootKey: rootKey)
-        try await workspaceFileContextStore.startWatchingRoot(id: rootRecord.id)
+        // A watcher activation failure must still be surfaced to the caller, but it must not
+        // skip persisted selection-slice hydration or codemap kickoff for an otherwise loaded
+        // root, so the throw is deferred until the remaining post-catalog work completes.
+        var deferredWatcherStartError: Error?
+        do {
+            try await workspaceFileContextStore.startWatchingRoot(id: rootRecord.id)
+        } catch {
+            if error is CancellationError { throw error }
+            deferredWatcherStartError = error
+        }
         guard workspaceFileContextRootsByRootKey[rootKey]?.id == rootRecord.id else { return }
 
         let partitionData = await selectionSliceCoordinator.loadSlices(
@@ -2570,6 +2579,10 @@ class WorkspaceFilesViewModel: ObservableObject {
                     purgeCachesOnEmptyInitialRequests: true
                 )
             }
+        }
+
+        if let deferredWatcherStartError {
+            throw deferredWatcherStartError
         }
     }
 
@@ -8154,6 +8167,11 @@ class WorkspaceFilesViewModel: ObservableObject {
             let folderPathsByID: [UUID: String]
             let fileIDsByPath: [String: UUID]
             let folderIDsByPath: [String: UUID]
+        }
+
+        @MainActor
+        func currentSlicesByRootForTesting() -> [String: [String: PartitionStore.StoredSlices]] {
+            currentSlicesByRoot
         }
 
         @MainActor
