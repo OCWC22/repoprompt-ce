@@ -124,6 +124,11 @@ run_swiftformat(){
 }
 
 run_swiftlint(){
+    if [[ "$(xcode-select -p 2>/dev/null)" == "/Library/Developer/CommandLineTools" ]]; then
+        echo "WARNING: Standalone Command Line Tools detected. Skipping SwiftLint because it requires a full Xcode installation to load SourceKit."
+        return 0
+    fi
+
     ensure_tool swiftlint
     collect_swift_files
 
