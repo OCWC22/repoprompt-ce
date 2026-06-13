@@ -164,17 +164,29 @@ fi
 
 if range_contains "$files" '^(Sources/RepoPrompt/|Tests/RepoPromptTests/)'; then
   log "Run coordinated root tests"
-  make dev-test
+  if [[ "$(xcode-select -p 2>/dev/null)" == "/Library/Developer/CommandLineTools" ]]; then
+    echo "WARNING: Standalone Command Line Tools detected. Skipping XCTest suite."
+  else
+    make dev-test
+  fi
 fi
 
 if range_contains "$files" '^Packages/RepoPromptAgentProviders/'; then
   log "Run coordinated provider tests"
-  make dev-provider-test
+  if [[ "$(xcode-select -p 2>/dev/null)" == "/Library/Developer/CommandLineTools" ]]; then
+    echo "WARNING: Standalone Command Line Tools detected. Skipping provider package tests (XCTest)."
+  else
+    make dev-provider-test
+  fi
 fi
 
 if range_contains "$files" '^Sources/RepoPrompt/'; then
   log "Build RepoPrompt product"
-  make dev-swift-build PRODUCT=RepoPrompt
+  if [[ "$(xcode-select -p 2>/dev/null)" == "/Library/Developer/CommandLineTools" ]]; then
+    echo "WARNING: Standalone Command Line Tools detected. Skipping RepoPrompt app build."
+  else
+    make dev-swift-build PRODUCT=RepoPrompt
+  fi
 fi
 
 if range_contains "$files" '^(Sources/RepoPromptMCP/|Sources/RepoPromptShared/)'; then
